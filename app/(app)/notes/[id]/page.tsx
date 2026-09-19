@@ -18,6 +18,8 @@ import { PageNavigator } from "@/components/notes/PageNavigator";
 import { PageTypeSelector } from "@/components/notes/PageTypeSelector";
 import { PageThemeSelector } from "@/components/notes/PageThemeSelector";
 
+import { exportNoteAsPdf } from "@/lib/notes/export-pdf";
+
 const TITLE_AUTOSAVE_DELAY = 500;
 
 type NoteExport = {
@@ -181,13 +183,21 @@ export default function NoteEditorPage() {
         pages: latestPages,
       };
 
-      const json = JSON.stringify(exportData, null, 2);
+      const json = JSON.stringify(
+        exportData,
+        null,
+        2,
+      );
 
-      const blob = new Blob([json], {
-        type: "application/json",
-      });
+      const blob = new Blob(
+        [json],
+        {
+          type: "application/json",
+        },
+      );
 
-      const url = URL.createObjectURL(blob);
+      const url =
+        URL.createObjectURL(blob);
 
       const safeTitle =
         latestNote.title
@@ -196,9 +206,12 @@ export default function NoteEditorPage() {
           .replace(/^-+|-+$/g, "")
           .toLowerCase() || "untitled";
 
-      const filename = `inkplan-${safeTitle}.json`;
+      const filename =
+        `inkplan-${safeTitle}.json`;
 
-      const link = document.createElement("a");
+      const link =
+        document.createElement("a");
+
       link.href = url;
       link.download = filename;
 
@@ -208,8 +221,51 @@ export default function NoteEditorPage() {
 
       URL.revokeObjectURL(url);
     } catch (err) {
-      console.error("Failed to export note:", err);
-      setError("Unable to export this note.");
+      console.error(
+        "Failed to export note:",
+        err,
+      );
+
+      setError(
+        "Unable to export this note.",
+      );
+    }
+  }
+
+  async function handleExportPdf() {
+    if (!note) {
+      return;
+    }
+
+    try {
+      setError(null);
+
+      const latestNote =
+        await notesRepo.get(note.id);
+
+      const latestPages =
+        await pagesRepo.listByNote(note.id);
+
+      if (!latestNote) {
+        setError(
+          "Unable to export this note.",
+        );
+        return;
+      }
+
+      exportNoteAsPdf(
+        latestNote.title,
+        latestPages,
+      );
+    } catch (err) {
+      console.error(
+        "Failed to export PDF:",
+        err,
+      );
+
+      setError(
+        "Unable to export this note as PDF.",
+      );
     }
   }
 
@@ -231,12 +287,15 @@ export default function NoteEditorPage() {
     );
 
     if (titleSaveTimer.current) {
-      clearTimeout(titleSaveTimer.current);
+      clearTimeout(
+        titleSaveTimer.current,
+      );
     }
 
-    titleSaveTimer.current = setTimeout(() => {
-      void saveTitle(title);
-    }, TITLE_AUTOSAVE_DELAY);
+    titleSaveTimer.current =
+      setTimeout(() => {
+        void saveTitle(title);
+      }, TITLE_AUTOSAVE_DELAY);
   }
 
   async function handleTitleBlur() {
@@ -245,7 +304,10 @@ export default function NoteEditorPage() {
     }
 
     if (titleSaveTimer.current) {
-      clearTimeout(titleSaveTimer.current);
+      clearTimeout(
+        titleSaveTimer.current,
+      );
+
       titleSaveTimer.current = null;
     }
 
@@ -258,18 +320,31 @@ export default function NoteEditorPage() {
     }
 
     try {
-      const newPage = await pagesRepo.create(
-        note.id,
+      const newPage =
+        await pagesRepo.create(
+          note.id,
+          pages.length,
+          "lined",
+          "light",
+        );
+
+      setPages((currentPages) => [
+        ...currentPages,
+        newPage,
+      ]);
+
+      setCurrentPageIndex(
         pages.length,
-        "lined",
-        "light",
+      );
+    } catch (err) {
+      console.error(
+        "Failed to add page:",
+        err,
       );
 
-      setPages((currentPages) => [...currentPages, newPage]);
-      setCurrentPageIndex(pages.length);
-    } catch (err) {
-      console.error("Failed to add page:", err);
-      setError("Unable to add a new page.");
+      setError(
+        "Unable to add a new page.",
+      );
     }
   }
 
@@ -278,116 +353,170 @@ export default function NoteEditorPage() {
       return;
     }
 
-    const currentPage = pages[currentPageIndex];
+    const currentPage =
+      pages[currentPageIndex];
 
     if (!currentPage) {
       return;
     }
 
-    const confirmed = window.confirm(
-      "Delete this page? All handwriting on this page will be permanently deleted.",
-    );
+    const confirmed =
+      window.confirm(
+        "Delete this page? All handwriting on this page will be permanently deleted.",
+      );
 
     if (!confirmed) {
       return;
     }
 
     try {
-      await pagesRepo.remove(currentPage.id);
-
-      const remainingPages = pages.filter(
-        (page) => page.id !== currentPage.id,
+      await pagesRepo.remove(
+        currentPage.id,
       );
 
-      const reorderedPages = remainingPages.map((page, index) => ({
-        ...page,
-        order: index,
-      }));
+      const remainingPages =
+        pages.filter(
+          (page) =>
+            page.id !== currentPage.id,
+        );
+
+      const reorderedPages =
+        remainingPages.map(
+          (page, index) => ({
+            ...page,
+            order: index,
+          }),
+        );
 
       for (const page of reorderedPages) {
-        await pagesRepo.update(page.id, {
-          order: page.order,
-        });
+        await pagesRepo.update(
+          page.id,
+          {
+            order: page.order,
+          },
+        );
       }
 
-      const nextIndex = Math.min(
-        currentPageIndex,
-        reorderedPages.length - 1,
-      );
+      const nextIndex =
+        Math.min(
+          currentPageIndex,
+          reorderedPages.length - 1,
+        );
 
       setPages(reorderedPages);
       setCurrentPageIndex(nextIndex);
     } catch (err) {
-      console.error("Failed to delete page:", err);
-      setError("Unable to delete this page.");
+      console.error(
+        "Failed to delete page:",
+        err,
+      );
+
+      setError(
+        "Unable to delete this page.",
+      );
     }
   }
 
   function handlePreviousPage() {
-    setCurrentPageIndex((index) => Math.max(0, index - 1));
-  }
-
-  function handleNextPage() {
-    setCurrentPageIndex((index) =>
-      Math.min(pages.length - 1, index + 1),
+    setCurrentPageIndex(
+      (index) =>
+        Math.max(0, index - 1),
     );
   }
 
-  async function handlePageTypeChange(pageType: PageType) {
-    const currentPage = pages[currentPageIndex];
+  function handleNextPage() {
+    setCurrentPageIndex(
+      (index) =>
+        Math.min(
+          pages.length - 1,
+          index + 1,
+        ),
+    );
+  }
+
+  async function handlePageTypeChange(
+    pageType: PageType,
+  ) {
+    const currentPage =
+      pages[currentPageIndex];
 
     if (!currentPage) {
       return;
     }
 
     try {
-      await pagesRepo.update(currentPage.id, {
-        pageType,
-      });
+      await pagesRepo.update(
+        currentPage.id,
+        {
+          pageType,
+        },
+      );
 
-      setPages((currentPages) =>
-        currentPages.map((page) =>
-          page.id === currentPage.id
-            ? {
-                ...page,
-                pageType,
-                updatedAt: Date.now(),
-              }
-            : page,
-        ),
+      setPages(
+        (currentPages) =>
+          currentPages.map(
+            (page) =>
+              page.id === currentPage.id
+                ? {
+                    ...page,
+                    pageType,
+                    updatedAt: Date.now(),
+                  }
+                : page,
+          ),
       );
     } catch (err) {
-      console.error("Failed to update page type:", err);
-      setError("Unable to change the page type.");
+      console.error(
+        "Failed to update page type:",
+        err,
+      );
+
+      setError(
+        "Unable to change the page type.",
+      );
     }
   }
 
-  async function handlePageThemeChange(theme: ThemeName) {
-    const currentPage = pages[currentPageIndex];
+  async function handlePageThemeChange(
+    theme: ThemeName,
+  ) {
+    const currentPage =
+      pages[currentPageIndex];
 
     if (!currentPage) {
       return;
     }
 
     try {
-      await pagesRepo.update(currentPage.id, {
-        theme,
-      });
+      await pagesRepo.update(
+        currentPage.id,
+        {
+          theme,
+        },
+      );
 
-      setPages((currentPages) =>
-        currentPages.map((page) =>
-          page.id === currentPage.id
-            ? {
-                ...page,
-                theme,
-                updatedAt: Date.now(),
-              }
-            : page,
-        ),
+      setPages(
+        (currentPages) =>
+          currentPages.map(
+            (page) =>
+              page.id === currentPage.id
+                ? {
+                    ...page,
+                    theme,
+                    updatedAt: Date.now(),
+                  }
+                : page,
+          ),
       );
     } catch (err) {
-      console.error("Failed to update page theme:", err);
-      setError("Unable to change the page theme.");
+      console.error(
+        "Failed to update page theme:",
+        err,
+      );
+
+      setError(
+        "Unable to change the page theme.",
+      );
     }
   }
 
@@ -441,7 +570,8 @@ export default function NoteEditorPage() {
     return null;
   }
 
-  const currentPage = pages[currentPageIndex];
+  const currentPage =
+    pages[currentPageIndex];
 
   if (!currentPage) {
     return null;
@@ -451,28 +581,48 @@ export default function NoteEditorPage() {
     <div className="flex h-[calc(100vh-4rem)] flex-col overflow-hidden bg-background text-foreground">
       <NoteEditorHeader
         title={note.title}
-        onTitleChange={handleTitleChange}
-        onTitleBlur={handleTitleBlur}
+        onTitleChange={
+          handleTitleChange
+        }
+        onTitleBlur={
+          handleTitleBlur
+        }
         onExport={handleExport}
         onDelete={handleDelete}
       />
 
       <div className="flex flex-wrap items-center justify-center gap-2 border-b border-border bg-background px-4 py-2">
         <PageTypeSelector
-          value={currentPage.pageType}
-          onChange={handlePageTypeChange}
+          value={
+            currentPage.pageType
+          }
+          onChange={
+            handlePageTypeChange
+          }
         />
 
         <PageThemeSelector
           value={currentPage.theme}
-          onChange={handlePageThemeChange}
+          onChange={
+            handlePageThemeChange
+          }
         />
+
+        <button
+          type="button"
+          onClick={handleExportPdf}
+          className="inline-flex h-9 items-center justify-center rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
+        >
+          Export PDF
+        </button>
       </div>
 
       <div className="min-h-0 flex-1">
         <CanvasStage
           pageId={currentPage.id}
-          pageType={currentPage.pageType}
+          pageType={
+            currentPage.pageType
+          }
           theme={currentPage.theme}
         />
       </div>
@@ -480,10 +630,16 @@ export default function NoteEditorPage() {
       <PageNavigator
         currentPage={currentPageIndex}
         totalPages={pages.length}
-        onPrevious={handlePreviousPage}
-        onNext={handleNextPage}
+        onPrevious={
+          handlePreviousPage
+        }
+        onNext={
+          handleNextPage
+        }
         onAddPage={handleAddPage}
-        onDeletePage={handleDeletePage}
+        onDeletePage={
+          handleDeletePage
+        }
       />
     </div>
   );
