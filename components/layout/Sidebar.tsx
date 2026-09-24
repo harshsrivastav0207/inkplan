@@ -1,16 +1,28 @@
 "use client";
 
 import {
+  BarChart3,
+  Check,
+  CloudOff,
   Droplets,
   FileText,
+  Globe2,
   LayoutDashboard,
   ListChecks,
+  Loader2,
   Moon,
   Sun,
   Timer,
+  TriangleAlert,
 } from "lucide-react";
 
+import { AuthAccount } from "@/components/auth/AuthAccount";
 import { NavItem } from "@/components/layout/NavItem";
+import { useAuth } from "@/components/auth/AuthProvider";
+import {
+  retryFailedItems,
+  useSyncStatus,
+} from "@/lib/db/sync/status";
 import { useTheme } from "@/lib/theme/theme-provider";
 
 const navigation = [
@@ -39,10 +51,26 @@ const navigation = [
     label: "Focus",
     icon: Timer,
   },
+  {
+    href: "/world",
+    label: "World",
+    icon: Globe2,
+  },
+  {
+    href: "/analytics",
+    label: "Analytics",
+    icon: BarChart3,
+  },
 ];
 
 export function Sidebar() {
   const { theme, setTheme } = useTheme();
+  const { isSignedIn, loading } = useAuth();
+
+  const syncStatus = useSyncStatus(
+    isSignedIn,
+    loading,
+  );
 
   function cycleTheme() {
     if (theme === "light") {
@@ -61,6 +89,41 @@ export function Sidebar() {
         ? "Dark"
         : "Warm";
 
+  let syncLabel = "Synced";
+  let SyncIcon = Check;
+
+  if (syncStatus.kind === "loading") {
+    syncLabel = "Checking sync...";
+    SyncIcon = Loader2;
+  } else if (syncStatus.kind === "signed-out") {
+    syncLabel = "Local only";
+    SyncIcon = CloudOff;
+  } else if (syncStatus.kind === "offline") {
+    syncLabel = "Offline";
+    SyncIcon = CloudOff;
+  } else if (syncStatus.kind === "syncing") {
+    syncLabel = "Syncing...";
+    SyncIcon = Loader2;
+  } else if (syncStatus.kind === "pending") {
+    syncLabel = "Waiting to sync";
+    SyncIcon = Loader2;
+  } else if (syncStatus.kind === "failed") {
+    syncLabel =
+      `${syncStatus.failedCount} item${
+        syncStatus.failedCount === 1 ? "" : "s"
+      } failed`;
+
+    SyncIcon = TriangleAlert;
+  }
+
+  async function handleRetry() {
+    if (syncStatus.failedCount === 0) {
+      return;
+    }
+
+    await retryFailedItems();
+  }
+
   return (
     <aside className="fixed inset-y-0 left-0 z-40 hidden w-60 border-r border-border bg-background md:flex md:flex-col">
       <div className="border-b border-border px-5 py-5">
@@ -73,7 +136,7 @@ export function Sidebar() {
         </p>
       </div>
 
-      <nav className="flex-1 space-y-1 p-3">
+      <nav className="flex-1 space-y-1 overflow-y-auto p-3">
         {navigation.map((item) => (
           <NavItem
             key={item.href}
@@ -85,6 +148,40 @@ export function Sidebar() {
       </nav>
 
       <div className="border-t border-border p-3">
+        <AuthAccount />
+
+        <div className="my-2 border-t border-border" />
+
+        {syncStatus.kind === "failed" ? (
+          <button
+            type="button"
+            onClick={() => void handleRetry()}
+            className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            title={
+              syncStatus.lastError ??
+              "Retry failed sync items"
+            }
+          >
+            <SyncIcon className="size-4" />
+
+            <span>{syncLabel}</span>
+          </button>
+        ) : (
+          <div className="flex items-center gap-3 px-3 py-2 text-sm text-muted-foreground">
+            <SyncIcon
+              className={
+                syncStatus.kind === "syncing" ||
+                syncStatus.kind === "pending" ||
+                syncStatus.kind === "loading"
+                  ? "size-4 animate-spin"
+                  : "size-4"
+              }
+            />
+
+            <span>{syncLabel}</span>
+          </div>
+        )}
+
         <button
           type="button"
           onClick={cycleTheme}

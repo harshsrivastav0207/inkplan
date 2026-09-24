@@ -1,11 +1,14 @@
 "use client";
 
+import { BudgetSummaryCard } from "@/components/dashboard/BudgetSummaryCard";
+import { FocusSummaryCard } from "@/components/dashboard/FocusSummaryCard";
 import { GreetingHeader } from "@/components/dashboard/GreetingHeader";
 import { NotesSummaryCard } from "@/components/dashboard/NotesSummaryCard";
 import { RecentNotesList } from "@/components/dashboard/RecentNotesList";
 import { TasksSummaryCard } from "@/components/dashboard/TasksSummaryCard";
 import { WaterSummaryCard } from "@/components/dashboard/WaterSummaryCard";
-import { FocusSummaryCard } from "@/components/dashboard/FocusSummaryCard";
+import { WorldSummaryCard } from "@/components/dashboard/WorldSummaryCard";
+
 import { useDashboardData } from "@/hooks/useDashboardData";
 
 export default function DashboardPage() {
@@ -21,6 +24,8 @@ export default function DashboardPage() {
           <div className="h-52 animate-pulse rounded-xl bg-muted" />
           <div className="h-52 animate-pulse rounded-xl bg-muted" />
           <div className="h-52 animate-pulse rounded-xl bg-muted" />
+          <div className="h-52 animate-pulse rounded-xl bg-muted" />
+          <div className="h-52 animate-pulse rounded-xl bg-muted" />
         </div>
       ) : (
         <div className="mt-8 grid gap-6 md:grid-cols-2">
@@ -30,9 +35,7 @@ export default function DashboardPage() {
 
           <TasksSummaryCard
             todayTasks={data.todayTasks}
-            completedTodayCount={
-              data.completedTodayCount
-            }
+            completedTodayCount={data.completedTodayCount}
           />
 
           <WaterSummaryCard
@@ -41,10 +44,18 @@ export default function DashboardPage() {
           />
 
           <FocusSummaryCard
-            focusMinutesToday={
-              data.focusMinutesToday
-            }
+            focusMinutesToday={data.focusMinutesToday}
           />
+
+          <BudgetSummaryCard
+            budgetTotal={data.budgetTotal}
+            budgetSpent={data.budgetSpent}
+            budgetRemaining={data.budgetRemaining}
+            hasBudget={data.hasBudget}
+            currency={data.settings?.currency ?? "INR"}
+          />
+
+          <WorldSummaryCard />
 
           <div className="md:col-span-2">
             <div className="rounded-xl border border-border bg-card p-5">

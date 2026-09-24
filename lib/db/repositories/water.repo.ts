@@ -2,6 +2,8 @@ import { db } from "../index";
 
 import type { WaterEntry } from "../types";
 
+import { enqueueSync } from "../sync/queue";
+
 const newId = () => crypto.randomUUID();
 
 const now = () => Date.now();
@@ -21,7 +23,21 @@ export const waterRepo = {
       timestamp: now(),
     };
 
-    await db.waterEntries.add(entry);
+    await db.transaction(
+      "rw",
+      db.waterEntries,
+      db.syncQueue,
+      async () => {
+        await db.waterEntries.add(entry);
+
+        await enqueueSync(db.syncQueue, {
+          table: "waterEntries",
+          recordId: entry.id,
+          operation: "upsert",
+          payload: entry,
+        });
+      },
+    );
 
     return entry;
   },
@@ -45,6 +61,24 @@ export const waterRepo = {
       .where("dateKey")
       .equals(dateKey)
       .sortBy("timestamp");
+  },
+
+  async listByDateRange(
+    fromKey: string,
+    toKey: string,
+  ): Promise<WaterEntry[]> {
+    const entries = await db.waterEntries
+      .where("dateKey")
+      .between(fromKey, toKey, true, true)
+      .toArray();
+
+    return entries.sort((a, b) => {
+      if (a.dateKey !== b.dateKey) {
+        return a.dateKey.localeCompare(b.dateKey);
+      }
+
+      return a.timestamp - b.timestamp;
+    });
   },
 
   async listHistory(
@@ -74,6 +108,20 @@ export const waterRepo = {
   },
 
   async remove(id: string) {
-    await db.waterEntries.delete(id);
+    await db.transaction(
+      "rw",
+      db.waterEntries,
+      db.syncQueue,
+      async () => {
+        await db.waterEntries.delete(id);
+
+        await enqueueSync(db.syncQueue, {
+          table: "waterEntries",
+          recordId: id,
+          operation: "delete",
+          payload: null,
+        });
+      },
+    );
   },
 };

@@ -6,6 +6,8 @@ export type ToolName = "pen" | "highlighter" | "eraser";
 
 export type Priority = "low" | "medium" | "high";
 
+export type TransactionType = "income" | "expense";
+
 export interface StrokePoint {
   x: number;
   y: number;
@@ -67,6 +69,17 @@ export interface FocusSession {
   audioTrackId: string | null;
 }
 
+export interface Transaction {
+  id: string;
+  type: TransactionType;
+  amount: number;
+  category: string;
+  note: string;
+  date: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface Settings {
   id: "app";
   theme: ThemeName;
@@ -76,5 +89,7 @@ export interface Settings {
   shortBreakMinutes: number;
   longBreakMinutes: number;
   audioVolume: number;
+  monthlyBudget: number;
+  currency: string;
   updatedAt: number;
 }

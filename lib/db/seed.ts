@@ -13,6 +13,8 @@ const DEFAULT_SETTINGS: Settings = {
   shortBreakMinutes: 5,
   longBreakMinutes: 15,
   audioVolume: 0.5,
+  monthlyBudget: 0,
+  currency: "INR",
   updatedAt: Date.now(),
 };
 

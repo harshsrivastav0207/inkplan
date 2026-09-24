@@ -1,6 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
 export type AudioTrackId =
   | "none"
@@ -21,8 +26,16 @@ export const AUDIO_TRACKS: {
   name: string;
   src: string;
 }[] = [
-  { id: "lofi", name: "Lo-fi", src: "/audio/lofi.mp3" },
-  { id: "piano", name: "Piano", src: "/audio/piano.mp3" },
+  {
+    id: "lofi",
+    name: "Lo-fi",
+    src: "/audio/lofi.mp3",
+  },
+  {
+    id: "piano",
+    name: "Piano",
+    src: "/audio/piano.mp3",
+  },
   {
     id: "inspiring-piano",
     name: "Inspiring Piano",
@@ -75,14 +88,47 @@ type UseAmbientAudioOptions = {
   volume?: number;
 };
 
+function clampVolume(volume: number): number {
+  return Math.min(Math.max(volume, 0), 1);
+}
+
+function isAbortError(error: unknown): boolean {
+  if (error instanceof DOMException) {
+    return error.name === "AbortError";
+  }
+
+  if (error instanceof Error) {
+    return error.name === "AbortError";
+  }
+
+  if (
+    error &&
+    typeof error === "object" &&
+    "name" in error
+  ) {
+    return (
+      (error as { name?: unknown }).name ===
+      "AbortError"
+    );
+  }
+
+  return false;
+}
+
 export function useAmbientAudio({
   trackId,
   volume = 0.5,
 }: UseAmbientAudioOptions) {
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioRef =
+    useRef<HTMLAudioElement | null>(null);
 
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const playRequestRef = useRef(0);
+
+  const [isPlaying, setIsPlaying] =
+    useState(false);
+
+  const [error, setError] =
+    useState<string | null>(null);
 
   const getAudio = useCallback(() => {
     if (audioRef.current) {
@@ -93,10 +139,11 @@ export function useAmbientAudio({
 
     audio.loop = true;
     audio.preload = "none";
-    audio.volume = Math.min(Math.max(volume, 0), 1);
+    audio.volume = clampVolume(volume);
 
     audio.addEventListener("play", () => {
       setIsPlaying(true);
+      setError(null);
     });
 
     audio.addEventListener("pause", () => {
@@ -115,9 +162,11 @@ export function useAmbientAudio({
     audioRef.current = audio;
 
     return audio;
-  }, [volume]);
+  }, []);
 
   const pause = useCallback(() => {
+    playRequestRef.current += 1;
+
     const audio = audioRef.current;
 
     if (!audio) {
@@ -129,6 +178,8 @@ export function useAmbientAudio({
   }, []);
 
   const stop = useCallback(() => {
+    playRequestRef.current += 1;
+
     const audio = audioRef.current;
 
     if (!audio) {
@@ -141,7 +192,9 @@ export function useAmbientAudio({
   }, []);
 
   const play = useCallback(
-    async (requestedTrackId: AudioTrackId = trackId) => {
+    async (
+      requestedTrackId: AudioTrackId = trackId,
+    ) => {
       if (requestedTrackId === "none") {
         return;
       }
@@ -151,11 +204,18 @@ export function useAmbientAudio({
       );
 
       if (!track) {
-        setError("Selected audio track is unavailable.");
+        setError(
+          "Selected audio track is unavailable.",
+        );
         return;
       }
 
       const audio = getAudio();
+
+      const requestId =
+        playRequestRef.current + 1;
+
+      playRequestRef.current = requestId;
 
       try {
         setError(null);
@@ -170,14 +230,30 @@ export function useAmbientAudio({
         }
 
         await audio.play();
+
+        if (
+          playRequestRef.current !== requestId
+        ) {
+          return;
+        }
+
         setIsPlaying(true);
+        setError(null);
       } catch (err) {
+        if (
+          isAbortError(err) ||
+          playRequestRef.current !== requestId
+        ) {
+          return;
+        }
+
         console.error(
           "[InkPlan Audio] Playback failed:",
           err,
         );
 
         setIsPlaying(false);
+
         setError(
           "Audio could not start. Try pressing Start again.",
         );
@@ -186,16 +262,18 @@ export function useAmbientAudio({
     [getAudio, trackId],
   );
 
-  const setVolume = useCallback((nextVolume: number) => {
-    const safeVolume = Math.min(
-      Math.max(nextVolume, 0),
-      1,
-    );
+  const setVolume = useCallback(
+    (nextVolume: number) => {
+      const safeVolume =
+        clampVolume(nextVolume);
 
-    if (audioRef.current) {
-      audioRef.current.volume = safeVolume;
-    }
-  }, []);
+      if (audioRef.current) {
+        audioRef.current.volume =
+          safeVolume;
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -204,19 +282,22 @@ export function useAmbientAudio({
       return;
     }
 
-    audio.volume = Math.min(
-      Math.max(volume, 0),
-      1,
-    );
+    audio.volume = clampVolume(volume);
   }, [volume]);
 
   useEffect(() => {
     const audio = getAudio();
 
     if (trackId === "none") {
+      playRequestRef.current += 1;
+
       audio.pause();
       audio.removeAttribute("src");
       audio.load();
+
+      setIsPlaying(false);
+      setError(null);
+
       return;
     }
 
@@ -233,6 +314,8 @@ export function useAmbientAudio({
 
     const wasPlaying = !audio.paused;
 
+    playRequestRef.current += 1;
+
     audio.pause();
 
     if (audio.src !== nextSrc) {
@@ -241,21 +324,49 @@ export function useAmbientAudio({
     }
 
     if (wasPlaying) {
-      void audio.play().catch((err) => {
-        console.error(
-          "[InkPlan Audio] Track switch failed:",
-          err,
-        );
+      const requestId =
+        playRequestRef.current;
 
-        setError(
-          "Could not switch to the selected track.",
-        );
-      });
+      void audio
+        .play()
+        .then(() => {
+          if (
+            playRequestRef.current !==
+            requestId
+          ) {
+            return;
+          }
+
+          setIsPlaying(true);
+          setError(null);
+        })
+        .catch((err) => {
+          if (
+            isAbortError(err) ||
+            playRequestRef.current !==
+              requestId
+          ) {
+            return;
+          }
+
+          console.error(
+            "[InkPlan Audio] Track switch failed:",
+            err,
+          );
+
+          setIsPlaying(false);
+
+          setError(
+            "Could not switch to the selected track.",
+          );
+        });
     }
   }, [trackId, getAudio]);
 
   useEffect(() => {
     return () => {
+      playRequestRef.current += 1;
+
       const audio = audioRef.current;
 
       if (!audio) {

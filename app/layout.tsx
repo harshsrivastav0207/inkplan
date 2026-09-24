@@ -1,9 +1,11 @@
 import type { Metadata, Viewport } from "next";
+import Script from "next/script";
 
 import { Geist, Geist_Mono, Inter } from "next/font/google";
 
 import "./globals.css";
 
+import { AuthProvider } from "@/components/auth/AuthProvider";
 import { ThemeProvider } from "@/lib/theme/theme-provider";
 
 import { cn } from "@/lib/utils";
@@ -85,15 +87,18 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <head>
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `(function(){try{var t=localStorage.getItem("inkplan-theme");if(t==="dark"||t==="warm")document.documentElement.classList.add(t);}catch(e){}})();`,
-          }}
-        />
+        <Script
+          id="inkplan-theme"
+          strategy="beforeInteractive"
+        >{`(function(){try{var t=localStorage.getItem("inkplan-theme");if(t==="dark"||t==="warm")document.documentElement.classList.add(t);}catch(e){}})();`}</Script>
       </head>
 
       <body className="min-h-full flex flex-col">
-        <ThemeProvider>{children}</ThemeProvider>
+        <ThemeProvider>
+          <AuthProvider>
+            {children}
+          </AuthProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

@@ -1,9 +1,15 @@
 import { db } from "../index";
+
 import type { Priority, Task } from "../types";
 
+import { enqueueSync } from "../sync/queue";
+
 const newId = () => crypto.randomUUID();
+
 const now = () => Date.now();
-const todayKey = () => new Date().toISOString().slice(0, 10);
+
+const todayKey = () =>
+  new Date().toISOString().slice(0, 10);
 
 export const tasksRepo = {
   async create(input: {
@@ -12,6 +18,8 @@ export const tasksRepo = {
     priority?: Priority;
     notes?: string;
   }): Promise<Task> {
+    const timestamp = now();
+
     const task: Task = {
       id: newId(),
       title: input.title,
@@ -20,11 +28,26 @@ export const tasksRepo = {
       priority: input.priority ?? "medium",
       completed: false,
       completedAt: null,
-      createdAt: now(),
-      updatedAt: now(),
+      createdAt: timestamp,
+      updatedAt: timestamp,
     };
 
-    await db.tasks.add(task);
+    await db.transaction(
+      "rw",
+      db.tasks,
+      db.syncQueue,
+      async () => {
+        await db.tasks.add(task);
+
+        await enqueueSync(db.syncQueue, {
+          table: "tasks",
+          recordId: task.id,
+          operation: "upsert",
+          payload: task,
+        });
+      },
+    );
+
     return task;
   },
 
@@ -38,11 +61,16 @@ export const tasksRepo = {
 
   async listToday(): Promise<Task[]> {
     const key = todayKey();
-    return db.tasks.where("dueDate").equals(key).toArray();
+
+    return db.tasks
+      .where("dueDate")
+      .equals(key)
+      .toArray();
   },
 
   async listUpcoming(): Promise<Task[]> {
     const key = todayKey();
+
     return db.tasks
       .where("dueDate")
       .above(key)
@@ -50,22 +78,114 @@ export const tasksRepo = {
       .toArray();
   },
 
-  async update(
-    id: string,
-    patch: Partial<Omit<Task, "id" | "createdAt">>
-  ) {
-    await db.tasks.update(id, { ...patch, updatedAt: now() });
+  async listCompletedInRange(
+    fromMs: number,
+    toMs: number,
+  ): Promise<Task[]> {
+    const tasks = await db.tasks
+      .where("completed")
+      .equals(1)
+      .toArray();
+
+    return tasks
+      .filter(
+        (task) =>
+          task.completed &&
+          task.completedAt !== null &&
+          task.completedAt >= fromMs &&
+          task.completedAt <= toMs,
+      )
+      .sort(
+        (a, b) =>
+          (a.completedAt ?? 0) -
+          (b.completedAt ?? 0),
+      );
   },
 
-  async setCompleted(id: string, completed: boolean) {
-    await db.tasks.update(id, {
-      completed,
-      completedAt: completed ? now() : null,
-      updatedAt: now(),
-    });
+  async countOverdue(
+    nowKey: string,
+  ): Promise<number> {
+    const overdueTasks = await db.tasks
+      .where("dueDate")
+      .below(nowKey)
+      .and((task) => !task.completed)
+      .toArray();
+
+    return overdueTasks.length;
+  },
+
+  async update(
+    id: string,
+    patch: Partial<Omit<Task, "id" | "createdAt">>,
+  ) {
+    await db.transaction(
+      "rw",
+      db.tasks,
+      db.syncQueue,
+      async () => {
+        await db.tasks.update(id, {
+          ...patch,
+          updatedAt: now(),
+        });
+
+        const task = await db.tasks.get(id);
+
+        if (!task) return;
+
+        await enqueueSync(db.syncQueue, {
+          table: "tasks",
+          recordId: id,
+          operation: "upsert",
+          payload: task,
+        });
+      },
+    );
+  },
+
+  async setCompleted(
+    id: string,
+    completed: boolean,
+  ) {
+    await db.transaction(
+      "rw",
+      db.tasks,
+      db.syncQueue,
+      async () => {
+        await db.tasks.update(id, {
+          completed,
+          completedAt: completed ? now() : null,
+          updatedAt: now(),
+        });
+
+        const task = await db.tasks.get(id);
+
+        if (!task) return;
+
+        await enqueueSync(db.syncQueue, {
+          table: "tasks",
+          recordId: id,
+          operation: "upsert",
+          payload: task,
+        });
+      },
+    );
   },
 
   async remove(id: string) {
-    await db.tasks.delete(id);
+    await db.transaction(
+      "rw",
+      db.tasks,
+      db.syncQueue,
+      async () => {
+        await db.tasks.delete(id);
+
+        await enqueueSync(db.syncQueue, {
+          table: "tasks",
+          recordId: id,
+          operation: "delete",
+          payload: null,
+        });
+      },
+    );
   },
 };

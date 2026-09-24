@@ -1,7 +1,16 @@
 import { db } from "../index";
-import type { Page, PageType, Stroke, ThemeName } from "../types";
+
+import type {
+  Page,
+  PageType,
+  Stroke,
+  ThemeName,
+} from "../types";
+
+import { enqueueSync } from "../sync/queue";
 
 const newId = () => crypto.randomUUID();
+
 const now = () => Date.now();
 
 export const pagesRepo = {
@@ -9,8 +18,10 @@ export const pagesRepo = {
     noteId: string,
     order: number,
     pageType: PageType = "lined",
-    theme: ThemeName = "light"
+    theme: ThemeName = "light",
   ): Promise<Page> {
+    const timestamp = now();
+
     const page: Page = {
       id: newId(),
       noteId,
@@ -18,11 +29,26 @@ export const pagesRepo = {
       pageType,
       theme,
       strokes: [],
-      createdAt: now(),
-      updatedAt: now(),
+      createdAt: timestamp,
+      updatedAt: timestamp,
     };
 
-    await db.pages.add(page);
+    await db.transaction(
+      "rw",
+      db.pages,
+      db.syncQueue,
+      async () => {
+        await db.pages.add(page);
+
+        await enqueueSync(db.syncQueue, {
+          table: "pages",
+          recordId: page.id,
+          operation: "upsert",
+          payload: page,
+        });
+      },
+    );
+
     return page;
   },
 
@@ -31,21 +57,105 @@ export const pagesRepo = {
   },
 
   async listByNote(noteId: string): Promise<Page[]> {
-    return db.pages.where("noteId").equals(noteId).sortBy("order");
+    return db.pages
+      .where("noteId")
+      .equals(noteId)
+      .sortBy("order");
+  },
+
+  async countAll(): Promise<number> {
+    return db.pages.count();
+  },
+
+  async countForNoteIds(
+    noteIds: string[],
+  ): Promise<number> {
+    if (noteIds.length === 0) {
+      return 0;
+    }
+
+    const pages = await db.pages.toArray();
+
+    const noteIdSet = new Set(noteIds);
+
+    return pages.filter((page) =>
+      noteIdSet.has(page.noteId),
+    ).length;
   },
 
   async update(
     id: string,
-    patch: Partial<Omit<Page, "id" | "noteId" | "createdAt">>
+    patch: Partial<
+      Omit<Page, "id" | "noteId" | "createdAt">
+    >,
   ) {
-    await db.pages.update(id, { ...patch, updatedAt: now() });
+    await db.transaction(
+      "rw",
+      db.pages,
+      db.syncQueue,
+      async () => {
+        await db.pages.update(id, {
+          ...patch,
+          updatedAt: now(),
+        });
+
+        const page = await db.pages.get(id);
+
+        if (!page) return;
+
+        await enqueueSync(db.syncQueue, {
+          table: "pages",
+          recordId: id,
+          operation: "upsert",
+          payload: page,
+        });
+      },
+    );
   },
 
-  async saveStrokes(id: string, strokes: Stroke[]) {
-    await db.pages.update(id, { strokes, updatedAt: now() });
+  async saveStrokes(
+    id: string,
+    strokes: Stroke[],
+  ) {
+    await db.transaction(
+      "rw",
+      db.pages,
+      db.syncQueue,
+      async () => {
+        await db.pages.update(id, {
+          strokes,
+          updatedAt: now(),
+        });
+
+        const page = await db.pages.get(id);
+
+        if (!page) return;
+
+        await enqueueSync(db.syncQueue, {
+          table: "pages",
+          recordId: id,
+          operation: "upsert",
+          payload: page,
+        });
+      },
+    );
   },
 
   async remove(id: string) {
-    await db.pages.delete(id);
+    await db.transaction(
+      "rw",
+      db.pages,
+      db.syncQueue,
+      async () => {
+        await db.pages.delete(id);
+
+        await enqueueSync(db.syncQueue, {
+          table: "pages",
+          recordId: id,
+          operation: "delete",
+          payload: null,
+        });
+      },
+    );
   },
 };

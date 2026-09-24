@@ -7,6 +7,7 @@ import {
   notesRepo,
   settingsRepo,
   tasksRepo,
+  transactionsRepo,
   waterRepo,
 } from "@/lib/db/repositories";
 
@@ -32,14 +33,26 @@ function getEndOfToday() {
   return date.getTime();
 }
 
+function getCurrentMonth() {
+  return new Date().toISOString().slice(0, 7);
+}
+
 export type DashboardData = {
   notesCount: number;
   recentNotes: Note[];
   todayTasks: Task[];
   completedTodayCount: number;
+
   waterTotal: number;
   waterTarget: number;
+
   focusMinutesToday: number;
+
+  budgetTotal: number;
+  budgetSpent: number;
+  budgetRemaining: number;
+  hasBudget: boolean;
+
   settings: Settings | undefined;
 };
 
@@ -52,6 +65,9 @@ export function useDashboardData() {
       const endOfToday =
         getEndOfToday();
 
+      const currentMonth =
+        getCurrentMonth();
+
       const [
         notes,
         todayTasks,
@@ -59,15 +75,25 @@ export function useDashboardData() {
         waterTotal,
         settings,
         focusMinutesToday,
+        monthlyTransactions,
       ] = await Promise.all([
         notesRepo.list(),
+
         tasksRepo.listToday(),
+
         tasksRepo.listAll(),
+
         waterRepo.getTodayTotal(),
+
         settingsRepo.get(),
+
         focusRepo.totalMinutesInRange(
           startOfToday,
           endOfToday,
+        ),
+
+        transactionsRepo.listByMonth(
+          currentMonth,
         ),
       ]);
 
@@ -79,19 +105,53 @@ export function useDashboardData() {
             task.completedAt <= endOfToday,
         ).length;
 
+      const budgetTotal =
+        settings?.monthlyBudget ?? 0;
+
+      const budgetSpent =
+        monthlyTransactions
+          .filter(
+            (transaction) =>
+              transaction.type === "expense",
+          )
+          .reduce(
+            (total, transaction) =>
+              total + transaction.amount,
+            0,
+          );
+
+      const budgetRemaining =
+        budgetTotal - budgetSpent;
+
       return {
         notesCount: notes.length,
+
         recentNotes: notes.slice(0, 3),
+
         todayTasks,
+
         completedTodayCount,
+
         waterTotal,
+
         waterTarget:
           settings?.dailyWaterTargetMl ??
           2000,
+
         focusMinutesToday,
+
+        budgetTotal,
+
+        budgetSpent,
+
+        budgetRemaining,
+
+        hasBudget: budgetTotal > 0,
+
         settings,
       };
     },
+
     [],
   );
 }
