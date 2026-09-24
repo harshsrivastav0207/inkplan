@@ -2,8 +2,9 @@ import { db } from "@/lib/db";
 
 import { enqueueSync } from "./queue";
 
-const MIGRATION_KEY =
-  "inkplan:local-data-migrated";
+function getMigrationKey(userId: string): string {
+  return `inkplan:local-data-migrated:${userId}`;
+}
 
 async function migrateNotes(): Promise<void> {
   const records = await db.notes.toArray();
@@ -98,12 +99,20 @@ async function migrateSettings(): Promise<void> {
   });
 }
 
-export async function migrateLocalDataToCloud(): Promise<boolean> {
+export async function migrateLocalDataToCloud(
+  userId: string,
+): Promise<boolean> {
   if (typeof window === "undefined") {
     return false;
   }
 
-  if (localStorage.getItem(MIGRATION_KEY) === "true") {
+  if (!userId) {
+    return false;
+  }
+
+  const migrationKey = getMigrationKey(userId);
+
+  if (localStorage.getItem(migrationKey) === "true") {
     return false;
   }
 
@@ -115,7 +124,7 @@ export async function migrateLocalDataToCloud(): Promise<boolean> {
   await migrateTransactions();
   await migrateSettings();
 
-  localStorage.setItem(MIGRATION_KEY, "true");
+  localStorage.setItem(migrationKey, "true");
 
   return true;
 }

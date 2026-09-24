@@ -124,11 +124,44 @@ export function useAmbientAudio({
 
   const playRequestRef = useRef(0);
 
+  /*
+   * volumeRef lets getAudio read the latest volume without
+   * having to re-create the audio element on every volume
+   * change. getAudio stays stable across renders.
+   */
+  const volumeRef = useRef(volume);
+
+  useEffect(() => {
+    volumeRef.current = volume;
+  }, [volume]);
+
   const [isPlaying, setIsPlaying] =
     useState(false);
 
   const [error, setError] =
     useState<string | null>(null);
+
+  /*
+   * Reset transient state during render when the track
+   * changes. This replaces the older pattern of calling
+   * setIsPlaying / setError directly inside the trackId
+   * effect, which React 19 disallows.
+   *
+   * React re-renders immediately with the new state before
+   * committing, so no cascading render loop occurs.
+   */
+  const [renderedTrackId, setRenderedTrackId] =
+    useState<AudioTrackId>(trackId);
+
+  if (renderedTrackId !== trackId) {
+    setRenderedTrackId(trackId);
+
+    if (trackId === "none") {
+      setIsPlaying(false);
+    }
+
+    setError(null);
+  }
 
   const getAudio = useCallback(() => {
     if (audioRef.current) {
@@ -139,7 +172,7 @@ export function useAmbientAudio({
 
     audio.loop = true;
     audio.preload = "none";
-    audio.volume = clampVolume(volume);
+    audio.volume = clampVolume(volumeRef.current);
 
     audio.addEventListener("play", () => {
       setIsPlaying(true);
@@ -295,9 +328,11 @@ export function useAmbientAudio({
       audio.removeAttribute("src");
       audio.load();
 
-      setIsPlaying(false);
-      setError(null);
-
+      /*
+       * isPlaying and error are reset during render
+       * (see the renderedTrackId guard above). No
+       * synchronous setState is needed here.
+       */
       return;
     }
 

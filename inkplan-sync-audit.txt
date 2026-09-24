@@ -1,3 +1,375 @@
+===== components/auth/AuthProvider.tsx =====
+"use client";
+
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  useCallback,
+  type ReactNode,
+} from "react";
+
+import type { User } from "@supabase/supabase-js";
+
+import { createClient } from "@/lib/supabase/client";
+
+import {
+  startSyncEngine,
+  stopSyncEngine,
+} from "@/lib/db/sync/engine";
+
+import { pullRemoteData } from "@/lib/db/sync/pull";
+
+import { migrateLocalDataToCloud } from "@/lib/db/sync/migration";
+
+import { db } from "@/lib/db";
+
+type AuthContextValue = {
+  user: User | null;
+  isSignedIn: boolean;
+  loading: boolean;
+  signOut: () => Promise<void>;
+};
+
+const AuthContext =
+  createContext<AuthContextValue | undefined>(
+    undefined,
+  );
+
+async function clearLocalAccountData(): Promise<void> {
+  await db.transaction(
+    "rw",
+    [
+      db.notes,
+      db.pages,
+      db.tasks,
+      db.waterEntries,
+      db.focusSessions,
+      db.transactions,
+      db.settings,
+      db.syncQueue,
+    ],
+    async () => {
+      await db.notes.clear();
+      await db.pages.clear();
+      await db.tasks.clear();
+      await db.waterEntries.clear();
+      await db.focusSessions.clear();
+      await db.transactions.clear();
+      await db.settings.clear();
+      await db.syncQueue.clear();
+    },
+  );
+}
+
+export function AuthProvider({
+  children,
+}: {
+  children: ReactNode;
+}) {
+  const [user, setUser] =
+    useState<User | null>(null);
+
+  const [loading, setLoading] =
+    useState(true);
+
+  const supabase = useMemo(
+    () => createClient(),
+    [],
+  );
+
+  const signOut = useCallback(async () => {
+    stopSyncEngine();
+
+    /*
+     * Give pending sync operations a chance to reach Supabase
+     * before clearing local data.
+     */
+    try {
+      const { pushPendingSync } = await import(
+        "@/lib/db/sync/push"
+      );
+
+      await pushPendingSync();
+    } catch (error) {
+      console.error(
+        "[InkPlan Auth] Final sync before logout failed:",
+        error,
+      );
+
+      throw new Error(
+        "InkPlan could not finish syncing your latest changes. Please try again while online.",
+      );
+    }
+
+    const pendingCount =
+      await db.syncQueue
+        .where("status")
+        .anyOf(["pending", "failed", "syncing"])
+        .count();
+
+    if (pendingCount > 0) {
+      throw new Error(
+        "InkPlan still has unsynced changes. Please wait for sync to finish before signing out.",
+      );
+    }
+
+    await clearLocalAccountData();
+
+    const { error } =
+      await supabase.auth.signOut();
+
+    if (error) {
+      throw error;
+    }
+
+    setUser(null);
+  }, [supabase]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadUser() {
+      const { data } =
+        await supabase.auth.getUser();
+
+      if (!mounted) {
+        return;
+      }
+
+      setUser(data.user ?? null);
+      setLoading(false);
+    }
+
+    void loadUser();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        if (!mounted) {
+          return;
+        }
+
+        setUser(session?.user ?? null);
+        setLoading(false);
+      },
+    );
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+      stopSyncEngine();
+    };
+  }, [supabase]);
+
+  useEffect(() => {
+    if (loading) {
+      return;
+    }
+
+    if (!user) {
+      stopSyncEngine();
+      return;
+    }
+
+    let cancelled = false;
+
+    async function syncOnAuth() {
+      try {
+        await pullRemoteData();
+
+        if (cancelled) {
+          return;
+        }
+
+        await migrateLocalDataToCloud(user!.id);
+      } catch (error) {
+        console.error(
+          "[InkPlan Sync] Initial sync failed:",
+          error,
+        );
+      }
+
+      if (cancelled) {
+        return;
+      }
+
+      startSyncEngine();
+    }
+
+    void syncOnAuth();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user, loading]);
+
+  const value = useMemo<AuthContextValue>(
+    () => ({
+      user,
+      isSignedIn: Boolean(user),
+      loading,
+      signOut,
+    }),
+    [user, loading, signOut],
+  );
+
+  return (
+    <AuthContext.Provider value={value}>
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+export function useAuth() {
+  const context =
+    useContext(AuthContext);
+
+  if (!context) {
+    throw new Error(
+      "useAuth must be used inside AuthProvider",
+    );
+  }
+
+  return context;
+}
+
+===== lib/db/sync/migration.ts =====
+import { db } from "@/lib/db";
+
+import { enqueueSync } from "./queue";
+
+function getMigrationKey(userId: string): string {
+  return `inkplan:local-data-migrated:${userId}`;
+}
+
+async function migrateNotes(): Promise<void> {
+  const records = await db.notes.toArray();
+
+  for (const record of records) {
+    await enqueueSync(db.syncQueue, {
+      table: "notes",
+      recordId: record.id,
+      operation: "upsert",
+      payload: record,
+    });
+  }
+}
+
+async function migratePages(): Promise<void> {
+  const records = await db.pages.toArray();
+
+  for (const record of records) {
+    await enqueueSync(db.syncQueue, {
+      table: "pages",
+      recordId: record.id,
+      operation: "upsert",
+      payload: record,
+    });
+  }
+}
+
+async function migrateTasks(): Promise<void> {
+  const records = await db.tasks.toArray();
+
+  for (const record of records) {
+    await enqueueSync(db.syncQueue, {
+      table: "tasks",
+      recordId: record.id,
+      operation: "upsert",
+      payload: record,
+    });
+  }
+}
+
+async function migrateWaterEntries(): Promise<void> {
+  const records = await db.waterEntries.toArray();
+
+  for (const record of records) {
+    await enqueueSync(db.syncQueue, {
+      table: "waterEntries",
+      recordId: record.id,
+      operation: "upsert",
+      payload: record,
+    });
+  }
+}
+
+async function migrateFocusSessions(): Promise<void> {
+  const records = await db.focusSessions.toArray();
+
+  for (const record of records) {
+    await enqueueSync(db.syncQueue, {
+      table: "focusSessions",
+      recordId: record.id,
+      operation: "upsert",
+      payload: record,
+    });
+  }
+}
+
+async function migrateTransactions(): Promise<void> {
+  const records = await db.transactions.toArray();
+
+  for (const record of records) {
+    await enqueueSync(db.syncQueue, {
+      table: "transactions",
+      recordId: record.id,
+      operation: "upsert",
+      payload: record,
+    });
+  }
+}
+
+async function migrateSettings(): Promise<void> {
+  const record = await db.settings.get("app");
+
+  if (!record) {
+    return;
+  }
+
+  await enqueueSync(db.syncQueue, {
+    table: "settings",
+    recordId: record.id,
+    operation: "upsert",
+    payload: record,
+  });
+}
+
+export async function migrateLocalDataToCloud(
+  userId: string,
+): Promise<boolean> {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  if (!userId) {
+    return false;
+  }
+
+  const migrationKey = getMigrationKey(userId);
+
+  if (localStorage.getItem(migrationKey) === "true") {
+    return false;
+  }
+
+  await migrateNotes();
+  await migratePages();
+  await migrateTasks();
+  await migrateWaterEntries();
+  await migrateFocusSessions();
+  await migrateTransactions();
+  await migrateSettings();
+
+  localStorage.setItem(migrationKey, "true");
+
+  return true;
+}
+
+===== lib/db/sync/push.ts =====
 import { db } from "@/lib/db";
 import { createClient } from "@/lib/supabase/client";
 import type { SyncQueueItem } from "./types";
@@ -78,6 +450,12 @@ function getLocalUpdatedAt(
   }
 }
 
+/*
+ * Only three settings fields sync across devices.
+ * Everything else (theme, page type, timer durations,
+ * audio volume) is a device-local preference and must
+ * never be written to Supabase.
+ */
 async function getSyncableSettings(
   payload: Record<string, unknown>,
 ): Promise<{
@@ -247,7 +625,10 @@ function formatSyncError(
     return parts.join(" | ");
   }
 
-  if (error && typeof error === "object") {
+  if (
+    error &&
+    typeof error === "object"
+  ) {
     const value =
       error as Record<string, unknown>;
 
@@ -280,22 +661,21 @@ function formatSyncError(
   return String(error);
 }
 
-type RemoteRecordInfo = {
-  id: string;
-  user_id: string | null;
-  updated_at: number;
-  deleted_at: number | null;
-};
-
 async function getRemoteRecord(
   supabase: ReturnType<typeof createClient>,
   remoteTable: string,
   recordId: string,
-): Promise<RemoteRecordInfo | null> {
+  userId: string,
+): Promise<{
+  id: string;
+  updated_at: number;
+  deleted_at: number | null;
+} | null> {
   const { data, error } = await supabase
     .from(remoteTable)
-    .select("id, user_id, updated_at, deleted_at")
+    .select("id, updated_at, deleted_at")
     .eq("id", recordId)
+    .eq("user_id", userId)
     .maybeSingle();
 
   if (error) {
@@ -310,10 +690,6 @@ async function getRemoteRecord(
 
   return {
     id: String(data.id),
-    user_id:
-      typeof data.user_id === "string"
-        ? data.user_id
-        : null,
     updated_at:
       typeof data.updated_at === "number"
         ? data.updated_at
@@ -325,10 +701,7 @@ async function getRemoteRecord(
   };
 }
 
-type PushResult =
-  | "pushed"
-  | "remote-newer"
-  | "foreign";
+type PushResult = "pushed" | "remote-newer";
 
 async function pushItem(
   supabase: ReturnType<typeof createClient>,
@@ -342,27 +715,9 @@ async function pushItem(
     supabase,
     remoteTable,
     item.recordId,
+    userId,
   );
 
-  /*
-   * Cross-account detection.
-   *
-   * The row exists in Supabase but is owned by a different
-   * user. An upsert would try to UPDATE that row and fail
-   * RLS with code 42501. Skip it entirely.
-   */
-  if (
-    remote &&
-    remote.user_id &&
-    remote.user_id !== userId
-  ) {
-    return "foreign";
-  }
-
-  /*
-   * Last-write-wins. If the cloud row is newer, skip this
-   * local change. A follow-up pull will sync it down.
-   */
   if (
     remote &&
     remote.updated_at > localUpdatedAt
@@ -404,14 +759,17 @@ async function pushItem(
   return "pushed";
 }
 
-function getQueueKey(item: SyncQueueItem): string {
+function getQueueKey(
+  item: SyncQueueItem,
+): string {
   return `${item.table}:${item.recordId}`;
 }
 
 function coalesceQueue(
   items: SyncQueueItem[],
 ): SyncQueueItem[] {
-  const latest = new Map<string, SyncQueueItem>();
+  const latest =
+    new Map<string, SyncQueueItem>();
 
   for (const item of items) {
     const key = getQueueKey(item);
@@ -459,13 +817,16 @@ async function removeDuplicateQueueItems(
   }
 }
 
-function getBackoffDelay(attempts: number): number {
+function getBackoffDelay(
+  attempts: number,
+): number {
   if (attempts <= 0) {
     return 0;
   }
 
   const delay =
-    BACKOFF_BASE_MS * Math.pow(2, attempts - 1);
+    BACKOFF_BASE_MS *
+    Math.pow(2, attempts - 1);
 
   return Math.min(delay, BACKOFF_MAX_MS);
 }
@@ -474,6 +835,19 @@ function isReadyForRetry(
   item: SyncQueueItem,
   now: number,
 ): boolean {
+  /*
+   * One-time recovery path:
+   *
+   * The settings mapper was over-sending fields after
+   * the schema was corrected. Older settings:app queue
+   * items are stuck behind exponential backoff.
+   *
+   * Force settings:app to retry on every push cycle so
+   * the corrected mapper drains the item immediately.
+   *
+   * This branch becomes a harmless no-op once the
+   * queue is empty. Remove it in a follow-up cleanup.
+   */
   if (
     item.table === "settings" &&
     item.recordId === "app"
@@ -490,6 +864,7 @@ function isReadyForRetry(
   }
 
   const backoff = getBackoffDelay(item.attempts);
+
   return now - item.lastAttemptAt >= backoff;
 }
 
@@ -578,38 +953,6 @@ export async function pushPendingSync(): Promise<void> {
           user.id,
         );
 
-        if (result === "foreign") {
-          /*
-           * The cloud row belongs to a different user.
-           * This local record is orphaned and will never
-           * sync. Delete the queue item and the local
-           * record so the current user is not exposed
-           * to another account's data.
-           */
-          console.warn(
-            `[InkPlan Sync] Skipping foreign record ${item.table}/${item.recordId} (owned by another user).`,
-          );
-
-          await db.syncQueue.delete(item.id);
-
-          const localTable = item.table as keyof typeof db;
-          const dexieTable =
-            (db[localTable] as unknown as {
-              delete: (id: string) => Promise<void>;
-            } | undefined);
-
-          if (dexieTable && typeof dexieTable.delete === "function") {
-            try {
-              await dexieTable.delete(item.recordId);
-            } catch {
-              // Table does not support delete by id, or
-              // record already gone. Safe to ignore.
-            }
-          }
-
-          continue;
-        }
-
         if (result === "remote-newer") {
           remoteWasNewer = true;
         }
@@ -620,22 +963,6 @@ export async function pushPendingSync(): Promise<void> {
         const errorMessage =
           formatSyncError(error);
 
-        /*
-         * Secondary cross-account detection.
-         *
-         * If the upsert still hit an RLS violation, the
-         * remote row belongs to another user. Do not
-         * retry — discard the queue item.
-         */
-        if (errorMessage.includes("code=42501")) {
-          console.warn(
-            `[InkPlan Sync] Discarding RLS-conflicting item ${item.table}/${item.recordId}.`,
-          );
-
-          await db.syncQueue.delete(item.id);
-          continue;
-        }
-
         await db.syncQueue.update(item.id, {
           status: "failed",
           attempts,
@@ -644,7 +971,14 @@ export async function pushPendingSync(): Promise<void> {
         });
 
         console.error(
-          `[InkPlan Sync] Failed ${item.table}/${item.recordId} (attempt ${attempts}): ${errorMessage}`,
+          "[InkPlan Sync] Failed",
+          {
+            table: item.table,
+            recordId: item.recordId,
+            operation: item.operation,
+            attempts,
+            errorMessage,
+          },
         );
       }
     }
@@ -655,7 +989,8 @@ export async function pushPendingSync(): Promise<void> {
         await pullRemoteData();
       } catch (error) {
         console.error(
-          `[InkPlan Sync] Pull after LWW conflict failed: ${formatSyncError(error)}`,
+          "[InkPlan Sync] Pull after LWW conflict failed:",
+          formatSyncError(error),
         );
       }
     }
