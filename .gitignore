@@ -41,3 +41,14 @@ yarn-error.log*
 next-env.d.ts
 
 .env.local
+# Supabase local CLI metadata
+supabase/.temp/
+
+# Local development / audit artifacts
+inkplan-*-audit.txt
+lint-files.txt
+lint-output.txt
+
+# AI/development instruction files
+AGENTS.md
+CLAUDE.md
